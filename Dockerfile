@@ -23,5 +23,9 @@ RUN camoufox fetch
 # 将项目中的所有文件拷贝到工作目录
 COPY . .
 
+# 暴露 Hugging Face Spaces 期望的端口（仅在服务器模式下使用）
+EXPOSE 7860
+
+
 # 设置容器启动时要执行的命令
-CMD ["python", "run_camoufox.py"]
+CMD ["python", "main.py"]

@@ -1,68 +1,56 @@
 import os
-import json
-from playwright.sync_api import TimeoutError, Error as PlaywrightError  # 导入特定的Playwright异常
+from playwright.sync_api import TimeoutError, Error as PlaywrightError
 from utils.logger import setup_logging
-from utils.cookie_handler import convert_cookie_editor_to_playwright
+from utils.cookie_manager import CookieManager
 from browser.navigation import handle_successful_navigation
 from camoufox.sync_api import Camoufox
-from utils.paths import cookies_dir, logs_dir
+from utils.paths import logs_dir
+from utils.common import parse_headless_mode, ensure_dir
+
 
 def run_browser_instance(config):
     """
     根据最终合并的配置，启动并管理一个单独的 Camoufox 浏览器实例。
-    新增了对导航后URL的检查和处理逻辑，并极大地增强了 page.goto 的错误处理和日志记录。
+    使用CookieManager统一管理cookie加载，避免重复的扫描逻辑。
     """
-    cookie_file_config = config.get('cookie_file')
-    cookie_file_name = os.path.basename(cookie_file_config) if cookie_file_config else None
+    cookie_source = config.get('cookie_source')
+    if not cookie_source:
+        # 使用默认logger进行错误报告
+        logger = setup_logging(os.path.join(logs_dir(), 'app.log'))
+        logger.error("错误: 配置中缺少cookie_source对象")
+        return
+
+    instance_label = cookie_source.display_name
     logger = setup_logging(
-        os.path.join(logs_dir(), 'app.log'), prefix=f"{cookie_file_name or 'bootstrap'}"
+        os.path.join(logs_dir(), 'app.log'), prefix=instance_label
     )
-
-    if not cookie_file_name:
-        logger.error("错误: 配置缺少 cookie_file，无法启动浏览器实例。")
-        return
-
-    if cookie_file_name != cookie_file_config:
-        logger.error(f"错误: cookie_file 必须仅包含文件名，不允许携带路径: {cookie_file_config}")
-        return
-
-    if not cookie_file_name.lower().endswith('.json'):
-        logger.error(f"错误: cookie_file 必须是 .json 文件: {cookie_file_config}")
-        return
-
-    cookies_root = cookies_dir().resolve()
-    cookie_file = cookies_root / cookie_file_name
-    resolved_cookie = cookie_file.resolve()
-    if cookies_root not in resolved_cookie.parents:
-        logger.error(f"错误: cookie_file 必须位于 cookies/ 目录下: {cookie_file_config}")
-        return
-
-    logger.info(f"尝试加载 Cookie 文件: {cookie_file}")
+    diagnostic_tag = instance_label.replace(os.sep, "_")
 
     expected_url = config.get('url')
     proxy = config.get('proxy')
     headless_setting = config.get('headless', 'virtual')
 
-    if not cookie_file or not expected_url or not os.path.exists(cookie_file):
-        logger.error(f"错误: 无效的配置或 Cookie 文件未找到 for {cookie_file}")
-        return
+    # 使用CookieManager加载cookie
+    cookie_manager = CookieManager(logger)
+    all_cookies = []
 
     try:
-        with open(cookie_file, 'r') as f:
-            cookies_from_file = json.load(f)
+        # 直接使用CookieSource对象加载cookie
+        cookies = cookie_manager.load_cookies(cookie_source)
+        all_cookies.extend(cookies)
+
     except Exception as e:
-        logger.exception(f"读取或解析 {cookie_file} 时出错: {e}")
+        logger.error(f"从cookie来源加载时出错: {e}")
         return
 
-    cookies = convert_cookie_editor_to_playwright(cookies_from_file, logger=logger)
-    
-    if str(headless_setting).lower() == 'true':
-        headless_mode = True
-    elif str(headless_setting).lower() == 'false':
-        headless_mode = False
-    else:
-        headless_mode = 'virtual'
+    # 3. 检查是否有任何cookie可用
+    if not all_cookies:
+        logger.error("错误: 没有可用的cookie（既没有有效的JSON文件，也没有环境变量）")
+        return
 
+    cookies = all_cookies
+
+    headless_mode = parse_headless_mode(headless_setting)
     launch_options = {"headless": headless_mode}
     if proxy:
         logger.info(f"使用代理: {proxy} 访问")
@@ -71,13 +59,12 @@ def run_browser_instance(config):
     # launch_options["block_images"] = True
     
     screenshot_dir = logs_dir()
-    os.makedirs(screenshot_dir, exist_ok=True)
+    ensure_dir(screenshot_dir)
 
     try:
         with Camoufox(**launch_options) as browser:
             context = browser.new_context()
             context.add_cookies(cookies)
-            logger.info(f"已为上下文添加 {len(cookies)} 个 Cookie。")
             page = context.new_page()
             
             # ####################################################################
@@ -96,7 +83,7 @@ def run_browser_instance(config):
                     if not response.ok: # response.ok 检查状态码是否在 200-299 范围内
                         logger.warning(f"警告：页面加载成功，但HTTP状态码表示错误: {response.status}")
                         # 即使状态码错误，也保存快照以供分析
-                        page.screenshot(path=os.path.join(screenshot_dir, f"WARN_http_status_{response.status}_{cookie_file_config}.png"))
+                        page.screenshot(path=os.path.join(screenshot_dir, f"WARN_http_status_{response.status}_{diagnostic_tag}.png"))
                 else:
                     # 对于非http/https的导航（如 about:blank），response可能为None
                     logger.warning("page.goto 未返回响应对象，可能是一个非HTTP导航。")
@@ -108,12 +95,12 @@ def run_browser_instance(config):
                 # 尝试保存诊断信息
                 try:
                     # 截图对于看到页面卡在什么状态非常有帮助（例如，空白页、加载中、Chrome错误页）
-                    screenshot_path = os.path.join(screenshot_dir, f"FAIL_timeout_{cookie_file_config}.png")
+                    screenshot_path = os.path.join(screenshot_dir, f"FAIL_timeout_{diagnostic_tag}.png")
                     page.screenshot(path=screenshot_path, full_page=True)
                     logger.info(f"已截取超时时的屏幕快照: {screenshot_path}")
                     
                     # 保存HTML可以帮助分析DOM结构，即使在无头模式下也很有用
-                    html_path = os.path.join(screenshot_dir, f"FAIL_timeout_{cookie_file_config}.html")
+                    html_path = os.path.join(screenshot_dir, f"FAIL_timeout_{diagnostic_tag}.html")
                     with open(html_path, 'w', encoding='utf-8') as f:
                         f.write(page.content())
                     logger.info(f"已保存超时时的页面HTML: {html_path}")
@@ -137,7 +124,7 @@ def run_browser_instance(config):
                 
                 # 同样，尝试截图，尽管此时页面可能完全无法访问
                 try:
-                    screenshot_path = os.path.join(screenshot_dir, f"FAIL_network_error_{cookie_file_config}.png")
+                    screenshot_path = os.path.join(screenshot_dir, f"FAIL_network_error_{diagnostic_tag}.png")
                     page.screenshot(path=screenshot_path)
                     logger.info(f"已截取网络错误时的屏幕快照: {screenshot_path}")
                 except Exception as diag_e:
@@ -155,7 +142,7 @@ def run_browser_instance(config):
             # ... 你原有的URL检查逻辑保持不变 ...
             if "accounts.google.com/v3/signin/identifier" in final_url:
                 logger.error("检测到Google登录页面（需要输入邮箱）。Cookie已完全失效。")
-                page.screenshot(path=os.path.join(screenshot_dir, f"FAIL_identifier_page_{cookie_file_config}.png"))
+                page.screenshot(path=os.path.join(screenshot_dir, f"FAIL_identifier_page_{diagnostic_tag}.png"))
                 return
             elif expected_url.split('?')[0] in final_url:
                 
@@ -172,7 +159,7 @@ def run_browser_instance(config):
                     logger.info("加载指示器已消失。页面已完成异步加载。")
                 except TimeoutError:
                     logger.error("页面加载指示器在30秒内未消失。页面可能已卡住。")
-                    page.screenshot(path=os.path.join(screenshot_dir, f"FAIL_spinner_stuck_{cookie_file_config}.png"))
+                    page.screenshot(path=os.path.join(screenshot_dir, f"FAIL_spinner_stuck_{diagnostic_tag}.png"))
                     return # Exit if the page is stuck loading
 
                 # --- NOW, we can safely check for the error message ---
@@ -183,10 +170,10 @@ def run_browser_instance(config):
                 # We only need a very short timeout here because the page should be stable.
                 if auth_error_locator.is_visible(timeout=2000):
                     logger.error(f"检测到认证失败的错误横幅: '{auth_error_text}'. Cookie已过期或无效。")
-                    screenshot_path = os.path.join(screenshot_dir, f"FAIL_auth_error_banner_{cookie_file_config}.png")
+                    screenshot_path = os.path.join(screenshot_dir, f"FAIL_auth_error_banner_{diagnostic_tag}.png")
                     page.screenshot(path=screenshot_path)
                     
-                    # html_path = os.path.join(screenshot_dir, f"FAIL_auth_error_banner_{cookie_file_config}.html")
+                    # html_path = os.path.join(screenshot_dir, f"FAIL_auth_error_banner_{diagnostic_tag}.html")
                     # with open(html_path, 'w', encoding='utf-8') as f:
                     #     f.write(page.content())
                     # logger.info(f"已保存包含错误信息的页面HTML: {html_path}")
@@ -199,19 +186,19 @@ def run_browser_instance(config):
                 
                 if login_button_cn.is_visible(timeout=1000) or login_button_en.is_visible(timeout=1000):
                     logger.error("页面上仍显示'登录'按钮。Cookie无效。")
-                    page.screenshot(path=os.path.join(screenshot_dir, f"FAIL_login_button_visible_{cookie_file_config}.png"))
+                    page.screenshot(path=os.path.join(screenshot_dir, f"FAIL_login_button_visible_{diagnostic_tag}.png"))
                     return
 
                 # --- If all checks pass, we assume success ---
                 logger.info("所有验证通过，确认已成功登录。")
-                handle_successful_navigation(page, logger, cookie_file_config)
+                handle_successful_navigation(page, logger, diagnostic_tag)
             elif "accounts.google.com/v3/signin/accountchooser" in final_url:
                 logger.warning("检测到Google账户选择页面。登录失败或Cookie已过期。")
-                page.screenshot(path=os.path.join(screenshot_dir, f"FAIL_chooser_click_failed_{cookie_file_config}.png"))
+                page.screenshot(path=os.path.join(screenshot_dir, f"FAIL_chooser_click_failed_{diagnostic_tag}.png"))
                 return
             else:
                 logger.error(f"导航到了一个意外的URL: {final_url}")
-                page.screenshot(path=os.path.join(screenshot_dir, f"FAIL_unexpected_url_{cookie_file_config}.png"))
+                page.screenshot(path=os.path.join(screenshot_dir, f"FAIL_unexpected_url_{diagnostic_tag}.png"))
                 return
 
     except KeyboardInterrupt:

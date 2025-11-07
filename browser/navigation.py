@@ -2,6 +2,7 @@ import time
 import os
 from playwright.sync_api import Page, expect
 from utils.paths import logs_dir
+from utils.common import ensure_dir
 
 def handle_untrusted_dialog(page: Page, logger=None):
     """
@@ -47,7 +48,7 @@ def handle_successful_navigation(page: Page, logger, cookie_file_config):
             # 在保持活动循环中出错时截屏
             try:
                 screenshot_dir = logs_dir()
-                os.makedirs(screenshot_dir, exist_ok=True)
+                ensure_dir(screenshot_dir)
                 screenshot_filename = os.path.join(screenshot_dir, f"FAIL_keep_alive_error_{cookie_file_config}.png")
                 page.screenshot(path=screenshot_filename, full_page=True)
                 logger.info(f"已在保持活动循环出错时截屏: {screenshot_filename}")

@@ -27,7 +27,8 @@ cookies/
 .DS_Store
 Thumbs.db
 
-# Claude-specific files
+# AI files
 .claude/
+.serena/
 CLAUDE.md
 AGENTS.md
