@@ -149,7 +149,7 @@ def reconnect_ws(page: Page, logger=None) -> str:
 def dismiss_interaction_modal(page: Page, logger=None) -> bool:
     """
     检测并关闭 interaction-modal 遮罩层。
-    使用用户提供的精确 HTML 结构进行定位。
+    增加了诊断截图功能，以便在点击失败时查看原因。
     """
     try:
         modal_selector = 'div.interaction-modal'
@@ -162,6 +162,18 @@ def dismiss_interaction_modal(page: Page, logger=None) -> bool:
         if logger:
             logger.info("检测到 interaction-modal 遮罩层，开始精准处理...")
 
+        # 尝试截图保存当前状态（诊断用）
+        try:
+            from utils.paths import logs_dir
+            from datetime import datetime
+            import os
+            debug_path = os.path.join(logs_dir(), f"DEBUG_modal_detected_{datetime.now().strftime('%H%M%S')}.png")
+            page.screenshot(path=debug_path)
+            if logger:
+                logger.info(f"已截取遮罩层诊断图: {debug_path}")
+        except:
+            pass
+
         # 精准选择器：在遮罩层内的 launch-button
         btn_selectors = [
             'div.interaction-modal button.launch-button',
@@ -170,42 +182,48 @@ def dismiss_interaction_modal(page: Page, logger=None) -> bool:
             'button:has-text("Launch")'
         ]
 
-        def try_click(container):
+        def try_click_robust(container):
             for selector in btn_selectors:
                 try:
                     btn = container.locator(selector).first
                     if btn.count() > 0 and btn.is_visible(timeout=1000):
                         if logger:
-                            logger.info(f"匹配到按钮选择器 '{selector}'，正在点击...")
-                        # 尝试多种点击方式
-                        try:
-                            btn.click(force=True, timeout=2000)
-                        except:
-                            # 备选：通过 JavaScript 点击
-                            btn.evaluate("el => el.click()")
+                            logger.info(f"匹配到按钮选择器 '{selector}'，尝试多种方式点击...")
+                        
+                        # 1. 尝试直接点击按钮中心坐标
+                        box = btn.bounding_box()
+                        if box:
+                            page.mouse.click(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
+                            time.sleep(1)
+                        
+                        # 2. 尝试标准点击
+                        btn.click(force=True, timeout=2000)
+                        
+                        # 3. 备选：通过 JavaScript 点击
+                        btn.evaluate("el => el.click()")
                         return True
                 except:
                     continue
             return False
 
         # 1. 在主页面尝试
-        if try_click(page):
-            time.sleep(2)
-            if modal.count() == 0 or not modal.first.is_visible(timeout=500):
+        if try_click_robust(page):
+            time.sleep(3) # 增加等待时间
+            if modal.count() == 0 or not modal.first.is_visible(timeout=1000):
                 if logger:
-                    logger.info("通过主页面按钮关闭成功")
+                    logger.info("通过主页面按钮处理成功")
                 return True
 
         # 2. 在 iframe 内部尝试
         iframe_selector = 'iframe[title="Preview"]'
-        iframe = page.locator(iframe_selector)
+        iframe = page.locator(iframe_selector).first
         if iframe.count() > 0:
             frame = page.frame_locator(iframe_selector)
-            if try_click(frame):
-                time.sleep(2)
-                if modal.count() == 0 or not modal.first.is_visible(timeout=500):
+            if try_click_robust(frame):
+                time.sleep(3)
+                if modal.count() == 0 or not modal.first.is_visible(timeout=1000):
                     if logger:
-                        logger.info("通过 iframe 内按钮关闭成功")
+                        logger.info("通过 iframe 内按钮处理成功")
                     return True
 
         # 3. 备选方案：点击屏幕中心
