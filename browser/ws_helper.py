@@ -149,47 +149,81 @@ def reconnect_ws(page: Page, logger=None) -> str:
 def dismiss_interaction_modal(page: Page, logger=None) -> bool:
     """
     检测并关闭 interaction-modal 遮罩层。
-    通过在 iframe 区域内模拟鼠标移动来触发遮罩层关闭。
+    1. 尝试直接点击 "Launch" 按钮。
+    2. 如果没找到按钮但遮罩层还在，尝试点击屏幕中心以触发关闭。
     
-    返回: True 如果成功关闭遮罩，False 如果未找到遮罩或关闭失败
+    返回: True 如果成功处理或未发现遮罩，False 如果处理失败
     """
     try:
         modal = page.locator('div.interaction-modal')
+        # 如果遮罩层不可见，直接返回成功
         if modal.count() == 0 or not modal.first.is_visible(timeout=500):
             return False
         
         if logger:
-            logger.info("检测到 interaction-modal 遮罩层，尝试关闭...")
+            logger.info("检测到 interaction-modal 遮罩层，尝试处理...")
+
+        # 1. 尝试直接在页面中点击 "Launch" 按钮 (无论是在 main page 还是 iframe)
+        # 有时 Launch 按钮在 iframe 内部
+        launch_btn_text = "Launch"
         
+        # 尝试在页面中查找
+        launch_btn = page.locator(f'text="{launch_btn_text}"').first
+        if launch_btn.count() > 0 and launch_btn.is_visible(timeout=1000):
+            if logger:
+                logger.info(f"找到 '{launch_btn_text}' 按钮，正在点击...")
+            launch_btn.click(force=True)
+            time.sleep(2)
+            if modal.count() == 0 or not modal.first.is_visible(timeout=500):
+                return True
+
+        # 2. 尝试在 iframe 中查找 Launch 按钮
         iframe = page.locator('iframe[title="Preview"]')
+        if iframe.count() > 0:
+            frame = page.frame_locator('iframe[title="Preview"]')
+            launch_btn_in_frame = frame.locator(f'text="{launch_btn_text}"').first
+            if launch_btn_in_frame.count() > 0 and launch_btn_in_frame.is_visible(timeout=1000):
+                if logger:
+                    logger.info(f"在 iframe 中找到 '{launch_btn_text}' 按钮，正在点击...")
+                launch_btn_in_frame.click(force=True)
+                time.sleep(2)
+                if modal.count() == 0 or not modal.first.is_visible(timeout=500):
+                    return True
+
+        # 3. 备选方案：点击屏幕中心 (用户建议)
+        if logger:
+            logger.info("尝试点击页面中心以关闭遮罩层...")
+        viewport = page.viewport_size
+        if viewport:
+            center_x = viewport['width'] / 2
+            center_y = viewport['height'] / 2
+            page.mouse.click(center_x, center_y)
+            time.sleep(1)
+            
+            if modal.count() == 0 or not modal.first.is_visible(timeout=500):
+                if logger:
+                    logger.info("已通过点击中心关闭遮罩层")
+                return True
+
+        # 4. 原有的鼠标移动保底逻辑
         if iframe.count() > 0:
             iframe_box = iframe.first.bounding_box()
             if iframe_box:
-                # 随机起点
-                curr_x = iframe_box['x'] + random.randint(50, int(iframe_box['width']) - 50)
-                curr_y = iframe_box['y'] + random.randint(50, int(iframe_box['height']) - 50)
+                curr_x = iframe_box['x'] + iframe_box['width'] / 2
+                curr_y = iframe_box['y'] + iframe_box['height'] / 2
                 
-                # 持续连续移动直到遮罩关闭，最多尝试30次
-                for i in range(30):
-                    # 从当前位置随机移动一段距离
-                    delta_x = random.randint(-30, 30)
-                    delta_y = random.randint(-20, 20)
-                    curr_x = max(iframe_box['x'] + 20, min(iframe_box['x'] + iframe_box['width'] - 20, curr_x + delta_x))
-                    curr_y = max(iframe_box['y'] + 20, min(iframe_box['y'] + iframe_box['height'] - 20, curr_y + delta_y))
-                    
-                    page.mouse.move(curr_x, curr_y)
-                    time.sleep(0.05)
-                    
-                    # 每次移动后检查遮罩是否关闭
-                    if modal.count() == 0 or not modal.first.is_visible(timeout=100):
-                        if logger:
-                            logger.info("已成功关闭 interaction-modal 遮罩层")
+                for i in range(10):  # 减少尝试次数
+                    delta_x = random.randint(-50, 50)
+                    delta_y = random.randint(-50, 50)
+                    page.mouse.move(curr_x + delta_x, curr_y + delta_y)
+                    time.sleep(0.1)
+                    if modal.count() == 0 or not modal.first.is_visible(timeout=200):
                         return True
         
         return False
     except Exception as e:
         if logger:
-            logger.debug(f"关闭 interaction-modal 时出错: {e}")
+            logger.debug(f"处理 interaction-modal 时出错: {e}")
         return False
 
 
