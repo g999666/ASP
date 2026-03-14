@@ -17,10 +17,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 下载 camoufox
+# 下载 camoufox（依赖已经安装，这里下载浏览器二进制）
 RUN camoufox fetch
 
-# 将项目中的所有文件拷贝到工作目录
+# 将项目中的所有文件拷贝到工作目录（代码变动频繁，放在后面）
 COPY . .
 
 # 暴露 Hugging Face Spaces 期望的端口（仅在服务器模式下使用）
