@@ -206,12 +206,34 @@ def dismiss_interaction_modal(page: Page, logger=None) -> bool:
                     continue
             return False
 
+        def simulate_activity(page: Page, duration_steps=15):
+            """在页面上模拟人类的鼠标随机滑动"""
+            viewport = page.viewport_size
+            if not viewport:
+                return
+            
+            w, h = viewport['width'], viewport['height']
+            curr_x, curr_y = w / 2, h / 2
+            
+            for _ in range(duration_steps):
+                # 生成一个新的目标点，采用小步长移动
+                target_x = max(10, min(w - 10, curr_x + random.randint(-150, 150)))
+                target_y = max(10, min(h - 10, curr_y + random.randint(-150, 150)))
+                
+                # 平滑移动一段距离
+                page.mouse.move(target_x, target_y, steps=3)
+                curr_x, curr_y = target_x, target_y
+                time.sleep(0.1)
+
         # 1. 在主页面尝试
         if try_click_robust(page):
-            time.sleep(3) # 增加等待时间
+            if logger:
+                logger.info("按钮已点击，正在执行后续鼠标滑动模拟以激活页面...")
+            simulate_activity(page)
+            time.sleep(2)
             if modal.count() == 0 or not modal.first.is_visible(timeout=1000):
                 if logger:
-                    logger.info("通过主页面按钮处理成功")
+                    logger.info("通过主页面交互处理成功")
                 return True
 
         # 2. 在 iframe 内部尝试
@@ -220,21 +242,22 @@ def dismiss_interaction_modal(page: Page, logger=None) -> bool:
         if iframe.count() > 0:
             frame = page.frame_locator(iframe_selector)
             if try_click_robust(frame):
-                time.sleep(3)
+                if logger:
+                    logger.info("iframe 内按钮已点击，执行滑动模拟...")
+                simulate_activity(page)
+                time.sleep(2)
                 if modal.count() == 0 or not modal.first.is_visible(timeout=1000):
                     if logger:
-                        logger.info("通过 iframe 内按钮处理成功")
+                        logger.info("通过 iframe 内交互处理成功")
                     return True
 
-        # 3. 备选方案：点击屏幕中心
+        # 3. 备选方案：直接进行鼠标大范围滑动（如果按钮没点着，靠滑动可能也能关掉）
         if logger:
-            logger.info("未能通过按钮关闭，尝试点击页面中心...")
-        viewport = page.viewport_size
-        if viewport:
-            page.mouse.click(viewport['width'] / 2, viewport['height'] / 2)
-            time.sleep(1)
-            if modal.count() == 0 or not modal.first.is_visible(timeout=500):
-                return True
+            logger.warning("按钮寻找或点击可能失败，尝试强制全屏滑动...")
+        simulate_activity(page, duration_steps=30)
+        time.sleep(1)
+        if modal.count() == 0 or not modal.first.is_visible(timeout=500):
+            return True
 
         # 4. 原有的鼠标移动保底逻辑
         if iframe.count() > 0:
