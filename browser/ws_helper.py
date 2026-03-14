@@ -149,60 +149,73 @@ def reconnect_ws(page: Page, logger=None) -> str:
 def dismiss_interaction_modal(page: Page, logger=None) -> bool:
     """
     检测并关闭 interaction-modal 遮罩层。
-    1. 尝试直接点击 "Launch" 按钮。
-    2. 如果没找到按钮但遮罩层还在，尝试点击屏幕中心以触发关闭。
-    
-    返回: True 如果成功处理或未发现遮罩，False 如果处理失败
+    使用用户提供的精确 HTML 结构进行定位。
     """
     try:
-        modal = page.locator('div.interaction-modal')
-        # 如果遮罩层不可见，直接返回成功
+        modal_selector = 'div.interaction-modal'
+        modal = page.locator(modal_selector)
+        
+        # 严格检查可见性
         if modal.count() == 0 or not modal.first.is_visible(timeout=500):
             return False
         
         if logger:
-            logger.info("检测到 interaction-modal 遮罩层，尝试处理...")
+            logger.info("检测到 interaction-modal 遮罩层，开始精准处理...")
 
-        # 1. 尝试直接在页面中点击 "Launch" 按钮 (无论是在 main page 还是 iframe)
-        # 有时 Launch 按钮在 iframe 内部
-        launch_btn_text = "Launch"
-        
-        # 尝试在页面中查找
-        launch_btn = page.locator(f'text="{launch_btn_text}"').first
-        if launch_btn.count() > 0 and launch_btn.is_visible(timeout=1000):
-            if logger:
-                logger.info(f"找到 '{launch_btn_text}' 按钮，正在点击...")
-            launch_btn.click(force=True)
+        # 精准选择器：在遮罩层内的 launch-button
+        btn_selectors = [
+            'div.interaction-modal button.launch-button',
+            'div.interaction-modal button:has-text("Launch")',
+            'button.launch-button',
+            'button:has-text("Launch")'
+        ]
+
+        def try_click(container):
+            for selector in btn_selectors:
+                try:
+                    btn = container.locator(selector).first
+                    if btn.count() > 0 and btn.is_visible(timeout=1000):
+                        if logger:
+                            logger.info(f"匹配到按钮选择器 '{selector}'，正在点击...")
+                        # 尝试多种点击方式
+                        try:
+                            btn.click(force=True, timeout=2000)
+                        except:
+                            # 备选：通过 JavaScript 点击
+                            btn.evaluate("el => el.click()")
+                        return True
+                except:
+                    continue
+            return False
+
+        # 1. 在主页面尝试
+        if try_click(page):
             time.sleep(2)
             if modal.count() == 0 or not modal.first.is_visible(timeout=500):
+                if logger:
+                    logger.info("通过主页面按钮关闭成功")
                 return True
 
-        # 2. 尝试在 iframe 中查找 Launch 按钮
-        iframe = page.locator('iframe[title="Preview"]')
+        # 2. 在 iframe 内部尝试
+        iframe_selector = 'iframe[title="Preview"]'
+        iframe = page.locator(iframe_selector)
         if iframe.count() > 0:
-            frame = page.frame_locator('iframe[title="Preview"]')
-            launch_btn_in_frame = frame.locator(f'text="{launch_btn_text}"').first
-            if launch_btn_in_frame.count() > 0 and launch_btn_in_frame.is_visible(timeout=1000):
-                if logger:
-                    logger.info(f"在 iframe 中找到 '{launch_btn_text}' 按钮，正在点击...")
-                launch_btn_in_frame.click(force=True)
+            frame = page.frame_locator(iframe_selector)
+            if try_click(frame):
                 time.sleep(2)
                 if modal.count() == 0 or not modal.first.is_visible(timeout=500):
+                    if logger:
+                        logger.info("通过 iframe 内按钮关闭成功")
                     return True
 
-        # 3. 备选方案：点击屏幕中心 (用户建议)
+        # 3. 备选方案：点击屏幕中心
         if logger:
-            logger.info("尝试点击页面中心以关闭遮罩层...")
+            logger.info("未能通过按钮关闭，尝试点击页面中心...")
         viewport = page.viewport_size
         if viewport:
-            center_x = viewport['width'] / 2
-            center_y = viewport['height'] / 2
-            page.mouse.click(center_x, center_y)
+            page.mouse.click(viewport['width'] / 2, viewport['height'] / 2)
             time.sleep(1)
-            
             if modal.count() == 0 or not modal.first.is_visible(timeout=500):
-                if logger:
-                    logger.info("已通过点击中心关闭遮罩层")
                 return True
 
         # 4. 原有的鼠标移动保底逻辑
