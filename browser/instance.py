@@ -95,8 +95,8 @@ def run_browser_instance(config, shutdown_event=None):
                 # ####################################################################
                 
                 response = None
-                nav_max_retries = 3
-                nav_retry_delay = 5
+                nav_max_retries = 5
+                nav_retry_delay = 10
                 
                 for nav_attempt in range(1, nav_max_retries + 1):
                     try:

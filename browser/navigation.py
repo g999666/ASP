@@ -16,7 +16,7 @@ def handle_popup_dialog(page: Page, logger=None):
     logger.info("开始处理弹窗...")
     
     # 定义需要查找的按钮列表
-    button_names = ["Got it", "Continue to the app"]
+    button_names = ["Got it", "Continue to the app", "Dismiss"]
     max_iterations = 10  # 最多尝试10轮，防止死循环
     total_clicks = 0
     
